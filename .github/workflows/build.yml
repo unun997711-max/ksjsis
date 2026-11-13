@@ -1,0 +1,467 @@
+
+name: ILARION - Android RPG Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android tools
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Install Godot
+        run: |
+          set -e
+          VERSION="4.4.1"
+          curl -fL \
+            "https://github.com/godotengine/godot/releases/download/${VERSION}-stable/Godot_v${VERSION}-stable_linux.x86_64.zip" \
+            -o godot.zip
+          unzip -q godot.zip
+          sudo mv "Godot_v${VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+          godot --version
+
+      - name: Install export templates
+        run: |
+          set -e
+          VERSION="4.4.1"
+          curl -fL \
+            "https://github.com/godotengine/godot/releases/download/${VERSION}-stable/Godot_v${VERSION}-stable_export_templates.tpz" \
+            -o templates.tpz
+          mkdir -p extracted
+          unzip -q templates.tpz -d extracted
+          DEST="$HOME/.local/share/godot/export_templates/${VERSION}.stable"
+          mkdir -p "$DEST"
+          cp -a extracted/templates/. "$DEST/"
+
+      - name: Generate ILARION game
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p Assets Scripts Scenes Data build
+
+          # Generate pixel-art graphics
+          python3 -m pip install --quiet pillow
+
+          python3 <<'PY'
+          from PIL import Image, ImageDraw
+          import random, os
+
+          os.makedirs("Assets", exist_ok=True)
+          random.seed(17)
+
+          # Pixel-art hero sprite
+          im = Image.new("RGBA", (32, 40), (0,0,0,0))
+          d = ImageDraw.Draw(im)
+
+          # Hair
+          d.rectangle((10,2,21,8), fill="#21182c")
+          d.rectangle((8,5,11,12), fill="#21182c")
+          d.rectangle((20,5,23,11), fill="#21182c")
+          # Face
+          d.rectangle((11,8,20,17), fill="#e7b58b")
+          d.point((13,12), fill="#17121d")
+          d.point((18,12), fill="#17121d")
+          d.line((14,15,17,15), fill="#8e4148")
+          # Cloak
+          d.polygon([(10,17),(21,17),(27,34),(5,34)], fill="#49316d")
+          d.polygon([(10,19),(16,24),(9,32),(6,30)], fill="#7650a4")
+          d.polygon([(21,19),(16,24),(24,32),(27,30)], fill="#302044")
+          # Belt
+          d.rectangle((9,27,22,29), fill="#d5a34b")
+          # Legs
+          d.rectangle((9,33,14,38), fill="#25243a")
+          d.rectangle((18,33,23,38), fill="#25243a")
+          d.rectangle((8,38,14,39), fill="#b9b6c5")
+          d.rectangle((18,38,24,39), fill="#b9b6c5")
+          # Sword
+          d.line((25,18,30,7), fill="#e7e9f4", width=2)
+          d.line((23,20,28,22), fill="#d8a64f", width=2)
+
+          im.resize((128,160), Image.Resampling.NEAREST).save("Assets/hero.png")
+
+          # Fantasy forest background
+          bg = Image.new("RGB", (320,180), "#172b35")
+          d = ImageDraw.Draw(bg)
+
+          # Ground tiles
+          for y in range(0,180,16):
+              for x in range(0,320,16):
+                  c = random.choice(["#294b3d","#315441","#284638","#365b45"])
+                  d.rectangle((x,y,x+15,y+15), fill=c)
+                  for _ in range(3):
+                      px=x+random.randint(1,14)
+                      py=y+random.randint(1,14)
+                      d.point((px,py), fill="#527456")
+
+          # Ancient path
+          for y in range(65,180,16):
+              x=145+random.randint(-12,12)
+              d.rectangle((x,y,x+28,y+15), fill="#786448")
+              d.line((x+3,y+4,x+20,y+4), fill="#9b8059")
+
+          # Trees
+          for x,y in [(25,25),(75,42),(270,25),(300,85),(35,125),(250,125)]:
+              d.rectangle((x+8,y+15,x+14,y+35), fill="#60432d")
+              d.ellipse((x-2,y-5,x+24,y+22), fill="#173d30")
+              d.ellipse((x+3,y,x+20,y+18), fill="#286046")
+              d.point((x+8,y+5), fill="#6c9b59")
+
+          # Ruins
+          d.rectangle((112,15,118,58), fill="#777b85")
+          d.rectangle((105,12,125,18), fill="#a5a5a2")
+          d.rectangle((195,18,201,56), fill="#777b85")
+          d.rectangle((190,14,208,20), fill="#a5a5a2")
+
+          bg.save("Assets/forest.png")
+
+          # Enemy sprite
+          enemy = Image.new("RGBA",(32,32),(0,0,0,0))
+          e=ImageDraw.Draw(enemy)
+          e.ellipse((5,4,27,27), fill="#54233b")
+          e.ellipse((9,8,23,23), fill="#9c3651")
+          e.polygon([(8,8),(4,0),(13,6)], fill="#a94355")
+          e.polygon([(24,8),(29,0),(20,6)], fill="#a94355")
+          e.rectangle((10,13,13,16), fill="#ffcf5c")
+          e.rectangle((19,13,22,16), fill="#ffcf5c")
+          e.line((12,22,20,22), fill="#211323", width=2)
+          enemy.resize((128,128),Image.Resampling.NEAREST).save("Assets/shadow_enemy.png")
+          PY
+
+          # Godot project
+          cat > project.godot <<'GODOT'
+          config_version=5
+
+          [application]
+          config/name="ILARION - War of Gods"
+          run/main_scene="res://Scenes/Main.tscn"
+          config/features=PackedStringArray("4.4", "GL Compatibility")
+
+          [display]
+          window/size/viewport_width=960
+          window/size/viewport_height=540
+          window/size/window_width_override=960
+          window/size/window_height_override=540
+          window/stretch/mode="canvas_items"
+          window/handheld/orientation=1
+
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          textures/default_filters/use_nearest_mipmap_filter=false
+          textures/canvas_textures/default_texture_filter=0
+          environment/defaults/default_clear_color=Color(0.04, 0.06, 0.08, 1)
+          GODOT
+
+          # Main scene
+          cat > Scenes/Main.tscn <<'SCENE'
+          [gd_scene load_steps=2 format=3]
+
+          [ext_resource type="Script" path="res://Scripts/Main.gd" id="1"]
+
+          [node name="ILARION" type="Node2D"]
+          script = ExtResource("1")
+          SCENE
+
+          # Game script
+          cat > Scripts/Main.gd <<'GDSCRIPT'
+          extends Node2D
+
+          const SPEED := 190.0
+          const PORT := 24567
+
+          var hero_texture: Texture2D
+          var enemy_texture: Texture2D
+          var world_texture: Texture2D
+
+          var hero_position := Vector2(480, 310)
+          var enemy_position := Vector2(620, 300)
+
+          var hp := 100
+          var enemy_hp := 100
+          var level := 1
+          var experience := 0
+          var attack_timer := 0.0
+
+          var move_left := false
+          var move_right := false
+          var move_up := false
+          var move_down := false
+
+          var dialogue_open := true
+          var dialogue_index := 0
+          var dialogue := [
+              "إيلاريون... لقد بدأت نبوءة الآلهة القديمة.",
+              "ليڤاي: من أنت؟ ولماذا تناديني؟",
+              "أفيان: لا وقت للأسئلة. مورغانيث استيقظ.",
+              "ميرا: يجب أن نصل إلى المعبد قبل اكتمال الكسوف.",
+              "رين: الطريق مليء بظلال الآلهة. استعدوا!",
+              "سيرافون: أيها الفاني... لن تعبر أرضي حياً!"
+          ]
+
+          var dialogue_label: Label
+          var status_label: Label
+          var message_label: Label
+          var room_label: Label
+
+          func _ready():
+              hero_texture = load("res://Assets/hero.png")
+              enemy_texture = load("res://Assets/shadow_enemy.png")
+              world_texture = load("res://Assets/forest.png")
+
+              create_interface()
+              update_status()
+              queue_redraw()
+
+          func create_interface():
+              var ui := CanvasLayer.new()
+              add_child(ui)
+
+              var panel := Panel.new()
+              panel.position = Vector2(12, 10)
+              panel.size = Vector2(300, 75)
+              ui.add_child(panel)
+
+              status_label = Label.new()
+              status_label.position = Vector2(12, 8)
+              status_label.add_theme_font_size_override("font_size", 19)
+              panel.add_child(status_label)
+
+              message_label = Label.new()
+              message_label.position = Vector2(340, 15)
+              message_label.add_theme_font_size_override("font_size", 19)
+              message_label.add_theme_color_override("font_color", Color.GOLD)
+              ui.add_child(message_label)
+
+              dialogue_label = Label.new()
+              dialogue_label.position = Vector2(170, 400)
+              dialogue_label.size = Vector2(620, 85)
+              dialogue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+              dialogue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+              dialogue_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+              dialogue_label.add_theme_font_size_override("font_size", 22)
+              dialogue_label.add_theme_color_override("font_color", Color.WHITE)
+              ui.add_child(dialogue_label)
+
+              var next_button := make_button(ui, "التالي ▶", Vector2(800, 450), Vector2(130,55))
+              next_button.pressed.connect(next_dialogue)
+
+              make_button(ui, "▲", Vector2(85,365), Vector2(65,55)).button_down.connect(func(): move_up=true)
+              make_button(ui, "▲", Vector2(85,365), Vector2(65,55)).button_up.connect(func(): move_up=false)
+
+              make_button(ui, "يسار", Vector2(15,425), Vector2(85,55)).button_down.connect(func(): move_left=true)
+              make_button(ui, "يمين", Vector2(110,425), Vector2(85,55)).button_down.connect(func(): move_right=true)
+              make_button(ui, "أسفل", Vector2(65,485), Vector2(85,45)).button_down.connect(func(): move_down=true)
+
+              make_button(ui, "هجوم ⚔", Vector2(800,350), Vector2(130,60)).pressed.connect(attack)
+              make_button(ui, "مهارة ✦", Vector2(800,280), Vector2(130,55)).pressed.connect(special_attack)
+              make_button(ui, "مهمة", Vector2(800,210), Vector2(130,50)).pressed.connect(show_quest)
+
+              room_label = Label.new()
+              room_label.position = Vector2(340, 48)
+              room_label.add_theme_font_size_override("font_size", 16)
+              ui.add_child(room_label)
+
+              dialogue_label.text = dialogue[0]
+
+          func make_button(parent: Node, caption: String, pos: Vector2, sz: Vector2) -> Button:
+              var b := Button.new()
+              b.text = caption
+              b.position = pos
+              b.size = sz
+              b.add_theme_font_size_override("font_size", 19)
+              parent.add_child(b)
+              return b
+
+          func next_dialogue():
+              dialogue_index += 1
+              if dialogue_index >= dialogue.size():
+                  dialogue_open = false
+                  dialogue_label.text = "انطلقت رحلتك... اهزم ظلال مورغانيث!"
+              else:
+                  dialogue_label.text = dialogue[dialogue_index]
+
+          func update_status():
+              status_label.text = "❤️ الصحة: %d\n⭐ المستوى: %d   XP: %d" % [hp, level, experience]
+
+          func show_quest():
+              message_label.text = "المهمة: اهزم حارس الظلال واجمع الخبرة."
+
+          func attack():
+              if dialogue_open:
+                  return
+              if hero_position.distance_to(enemy_position) < 150:
+                  enemy_hp -= 25
+                  message_label.text = "ضربة سيف! -25"
+                  if enemy_hp <= 0:
+                      enemy_hp = 100
+                      experience += 50
+                      message_label.text = "انتصار! حصلت على 50 XP"
+                      if experience >= level * 100:
+                          experience = 0
+                          level += 1
+                          hp = 100
+                          message_label.text = "ارتفع مستواك!"
+              else:
+                  message_label.text = "اقترب من العدو أولاً."
+              update_status()
+              queue_redraw()
+
+          func special_attack():
+              if dialogue_open:
+                  return
+              if hero_position.distance_to(enemy_position) < 260:
+                  enemy_hp -= 45
+                  message_label.text = "✦ انفجار طاقة الآلهة! -45"
+                  if enemy_hp <= 0:
+                      enemy_hp = 100
+                      experience += 70
+              else:
+                  message_label.text = "العدو بعيد عن مدى المهارة."
+              update_status()
+              queue_redraw()
+
+          func _process(delta):
+              var direction := Vector2.ZERO
+
+              if Input.is_key_pressed(KEY_A) or move_left:
+                  direction.x -= 1
+              if Input.is_key_pressed(KEY_D) or move_right:
+                  direction.x += 1
+              if Input.is_key_pressed(KEY_W) or move_up:
+                  direction.y -= 1
+              if Input.is_key_pressed(KEY_S) or move_down:
+                  direction.y += 1
+
+              if direction.length() > 0:
+                  hero_position += direction.normalized() * SPEED * delta
+
+              hero_position.x = clampf(hero_position.x, 30, 930)
+              hero_position.y = clampf(hero_position.y, 100, 520)
+
+              attack_timer -= delta
+              if not dialogue_open and hero_position.distance_to(enemy_position) < 90:
+                  if attack_timer <= 0:
+                      hp -= 5
+                      attack_timer = 1.2
+                      if hp <= 0:
+                          hp = 100
+                          hero_position = Vector2(480,310)
+                          message_label.text = "سقطت في المعركة... عدت إلى نقطة البداية."
+                      update_status()
+
+              queue_redraw()
+
+          func _draw():
+              if world_texture:
+                  draw_texture_rect(world_texture, Rect2(0,0,960,540), false)
+
+              # Decorative magical lights
+              for i in range(12):
+                  var x := float((i * 83 + 35) % 950)
+                  var y := float((i * 47 + 110) % 500)
+                  draw_circle(Vector2(x,y), 3, Color(0.45,0.8,0.65,0.5))
+
+              # Enemy
+              if enemy_texture:
+                  draw_texture_rect(enemy_texture, Rect2(enemy_position-Vector2(45,45),Vector2(90,90)), false)
+
+              draw_rect(Rect2(enemy_position.x-42,enemy_position.y-57,84,8),Color.BLACK)
+              draw_rect(Rect2(enemy_position.x-42,enemy_position.y-57,84.0*enemy_hp/100.0,8),Color.RED)
+
+              # Hero
+              if hero_texture:
+                  draw_texture_rect(hero_texture, Rect2(hero_position-Vector2(32,40),Vector2(64,80)), false)
+
+              draw_circle(hero_position+Vector2(0,40),3,Color(0,0,0,0.4))
+          GDSCRIPT
+
+          # Android export preset
+          cat > export_presets.cfg <<'PRESET'
+          [preset.0]
+          name="Android"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="build/ILARION.apk"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          gradle_build/use_gradle_build=false
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          package/unique_name="org.ilarion.game"
+          package/name="ILARION"
+          package/signed=true
+          version/code=1
+          version/name="1.0"
+          screen/immersive_mode=true
+          screen/orientation=1
+          permissions/internet=true
+          PRESET
+
+      - name: Configure Godot Android paths
+        run: |
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          EOF
+
+      - name: Import project
+        run: |
+          godot --headless --editor --path . --quit
+
+      - name: Export APK
+        run: |
+          set -e
+          mkdir -p build
+          godot --headless --path . --export-debug Android build/ILARION.apk
+          test -s build/ILARION.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ILARION-ANDROID-APK
+          path: build/ILARION.apk
+          if-no-files-found: error
+          retention-days: 14
